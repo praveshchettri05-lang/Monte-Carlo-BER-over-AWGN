@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Experiment 12 — Monte Carlo BER over AWGN</title>
+<style>
+:root{--ink:#1f2937;--mut:#6b7280;--navy:#1f3864;--bg:#f8fafc;--card:#fff;--line:#d1d5db}
+*{box-sizing:border-box}body{margin:0;font:15px/1.5 Calibri,Segoe UI,system-ui,sans-serif;color:var(--ink);background:var(--bg)}
+main{max-width:1100px;margin:0 auto;padding:20px}
+h1{color:var(--navy);font-size:24px;margin:0 0 4px}h2{color:var(--navy);font-size:17px;margin:22px 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px}
+.row{display:flex;flex-wrap:wrap;gap:14px;align-items:end}
+label{font-size:13px;color:var(--mut);display:flex;flex-direction:column;gap:3px}
+input[type=number]{width:100px;padding:5px;border:1px solid var(--line);border-radius:5px;font:inherit}
+.mods label{flex-direction:row;align-items:center;gap:5px;color:var(--ink)}
+button{background:var(--navy);color:#fff;border:0;border-radius:6px;padding:8px 14px;font:inherit;cursor:pointer}
+button.alt{background:#fff;color:var(--navy);border:1px solid var(--navy)}
+canvas{width:100%;height:380px;background:#fff;border:1px solid var(--line);border-radius:6px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:800px){.grid{grid-template-columns:1fr}}
+table{border-collapse:collapse;width:100%;font-size:13px}th,td{border-bottom:1px solid var(--line);padding:3px 6px;text-align:right}th:first-child,td:first-child{text-align:left}
+.tw{max-height:320px;overflow:auto}
+.pass{color:#15803d;font-weight:600}.fail{color:#b91c1c;font-weight:600}
+.ai{background:#e8f0f8;border:1px solid #888;padding:10px;font-style:italic;font-size:13px}
+.val{background:#fff2cc;border:1px solid #888;padding:10px;font-size:13px}
+#bar{height:6px;background:#e5e7eb;border-radius:3px;margin-top:10px}#bar i{display:block;height:100%;width:0;background:var(--navy);border-radius:3px}
+small,.mut{color:var(--mut)}li{margin:3px 0}
+</style></head><body><main>
+<h1>Experiment 12 — Monte Carlo BER over AWGN</h1>
+<div class="mut">BPSK · QPSK · BFSK · 8-PSK · 16-QAM · 64-QAM — adaptive stopping at N errors or max bits per Eb/N0 point</div>
+
+<h2>Conventions (explicit)</h2>
+<div class="card"><ul style="margin:0;padding-left:18px">
+<li>Constellations normalised to <b>Es = 1</b> (mean symbol energy). Bits/symbol <b>k = log₂M</b>, so <b>Eb = 1/k</b>.</li>
+<li><b>N0 = Eb / (Eb/N0) = 1 / (k·γ)</b>, γ = 10^(dB/10).</li>
+<li>Complex noise n = nI + j·nQ with total variance E|n|² = N0, i.e. <b>σ² = N0/2 per real dimension</b>.</li>
+<li>BFSK: coherent orthogonal, symbols e₀=(1,0), e₁=(0,1) (Es=Eb=1), ML detection = larger correlator output. All others: Gray-mapped, minimum-distance detection.</li>
+<li>Zero-error points are plotted as <b>upper bounds</b> (rule of three, 95%: BER &lt; 3/N, hollow ▽), never as BER = 0.</li></ul></div>
+
+<div class="ai"><b style="color:#2e75b6;font-style:normal">AI-READY PROMPT</b><br>Write an adaptive Monte Carlo BER driver that stops after 200 errors or 10^6 bits per Eb/N0 point. Keep Eb/N0, bits per symbol, constellation normalization and complex-noise variance explicit. Overlay theory where valid.</div>
+
+<h2>Simulation setup</h2>
+<div class="card">
+<div class="row mods" id="mods"></div>
+<div class="row" style="margin-top:12px">
+<label>Eb/N0 start (dB)<input type="number" id="dmin" value="0"></label>
+<label>Eb/N0 stop (dB)<input type="number" id="dmax" value="14"></label>
+<label>Step (dB)<input type="number" id="dstep" value="1" min="0.1" step="0.1"></label>
+<label>Stop at errors<input type="number" id="emax" value="200"></label>
+<label>Max bits<input type="number" id="bmax" value="1000000"></label>
+<button id="run">Run simulation</button><button class="alt" id="stop">Stop</button><button class="alt" id="val">Mandatory validation</button>
+</div><div id="bar"><i></i></div><div class="mut" id="status" style="margin-top:6px">Idle.</div></div>
+
+<div class="val"><b style="color:#7f6000">Mandatory validation:</b> At very high SNR the detector should reproduce a noiseless input exactly; at low SNR the BER should approach the expected random-decision limit (0.5).
+<div id="vout" style="margin-top:6px"></div></div>
+
+<h2>Required visualizations</h2>
+<div class="grid">
+<div class="card"><b>BER vs Eb/N0</b> <small>(solid markers = simulated, dashed = theory, ▽ = upper bound)</small><canvas id="c1"></canvas><button class="alt" onclick="png('c1')" style="margin-top:6px">PNG</button></div>
+<div class="card"><b>Error count vs transmitted bits</b> <small>(one marker per Eb/N0 point)</small><canvas id="c2"></canvas><button class="alt" onclick="png('c2')" style="margin-top:6px">PNG</button></div>
+</div>
+<div class="card tw"><table id="tbl"><thead><tr><th>Mod</th><th>Eb/N0 dB</th><th>Errors</th><th>Bits</th><th>BER (sim)</th><th>Theory</th><th>Sim/Theory</th></tr></thead><tbody></tbody></table></div>
+
+<h2>Observation and interpretation</h2>
+<div class="card">
+<b>Expected physical effect (written before running)</b>
+<ul>
+<li>BPSK and QPSK (Gray) lie on the same BER-vs-Eb/N0 curve, Q(√(2Eb/N0)): QPSK is two independent BPSK streams, each getting the full Eb.</li>
+<li>Coherent BFSK needs ≈3 dB more Eb/N0 than BPSK for the same BER (orthogonal vs antipodal signalling, Q(√(Eb/N0))).</li>
+<li>Higher order (8-PSK, 16-QAM, 64-QAM) need progressively more Eb/N0 since points are closer together at fixed Es; expect ≈4 dB, ≈6 dB... shifts relative to QPSK rising with M.</li>
+<li>Theory for 8-PSK and M-QAM is a nearest-neighbour approximation: accurate at high SNR, slightly off (optimistic/pessimistic) at low SNR.</li>
+<li>At very low SNR all BERs tend to 0.5; at very high SNR errors vanish and only an upper bound can be reported.</li></ul>
+<b>Observed (auto-generated after a run)</b>
+<div id="obs" class="mut">Run a simulation to populate.</div></div>
+</main>
+<script>
+const MODS={BPSK:{k:1,col:'#2563eb'},QPSK:{k:2,col:'#dc2626'},BFSK:{k:1,col:'#059669'},'8-PSK':{k:3,col:'#d97706'},'16-QAM':{k:4,col:'#7c3aed'},'64-QAM':{k:6,col:'#0891b2'}};
+const $=id=>document.getElementById(id);
+$('mods').innerHTML=Object.keys(MODS).map(m=>`<label><input type="checkbox" value="${m}" checked><span style="color:${MODS[m].col}">■</span> ${m}</label>`).join('');
+const gray=n=>n^(n>>1),pop=x=>{let c=0;while(x){c+=x&1;x>>=1}return c};
+function erfc(x){const z=Math.abs(x),t=1/(1+.5*z);const r=t*Math.exp(-z*z-1.26551223+t*(1.00002368+t*(.37409196+t*(.09678418+t*(-.18628806+t*(.27886807+t*(-1.13520398+t*(1.48851587+t*(-.82215223+t*.17087277)))))))));return x>=0?r:2-r}
+const Q=x=>.5*erfc(x/Math.SQRT2);
+function build(n){const k=MODS[n].k,M=1<<k;let I=[],Qd=[],L=[];
+ if(n==='BFSK'){I=[1,0];Qd=[0,1];L=[0,1]}
+ else if(n==='BPSK'){I=[1,-1];Qd=[0,0];L=[0,1]}
+ else if(n.endsWith('PSK')){for(let m=0;m<M;m++){const a=2*Math.PI*m/M;I.push(Math.cos(a));Qd.push(Math.sin(a));L.push(gray(m))}}
+ else{const s=Math.sqrt(M),h=k/2;for(let i=0;i<s;i++)for(let j=0;j<s;j++){I.push(2*i-(s-1));Qd.push(2*j-(s-1));L.push(gray(i)<<h|gray(j))}}
+ const Es=I.reduce((a,v,i)=>a+v*v+Qd[i]*Qd[i],0)/M,g=1/Math.sqrt(Es);
+ return{I:I.map(v=>v*g),Q:Qd.map(v=>v*g),L,M,k,Es:1}}
+function theory(n,db){const g=Math.pow(10,db/10),k=MODS[n].k,M=1<<k;
+ if(n==='BPSK'||n==='QPSK')return Q(Math.sqrt(2*g));if(n==='BFSK')return Q(Math.sqrt(g));
+ if(n==='8-PSK')return (2/k)*Q(Math.sqrt(2*k*g)*Math.sin(Math.PI/M));
+ return (4/k)*(1-1/Math.sqrt(M))*Q(Math.sqrt(3*k*g/(M-1)))}
+function gauss(){let u=1-Math.random(),v=Math.random();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)}
+const yieldUI=()=>new Promise(r=>setTimeout(r,0));
+let stopFlag=false;
+async function point(n,db,emax,bmax,noiseless){const c=build(n),k=c.k,M=c.M;
+ const N0=noiseless?0:1/(k*Math.pow(10,db/10)),sg=Math.sqrt(N0/2);
+ let err=0,bits=0,t=performance.now();
+ while(err<emax&&bits<bmax&&!stopFlag){
+  for(let s=0;s<2000&&err<emax;s++){const m=Math.floor(Math.random()*M);
+   const rI=c.I[m]+sg*gauss(),rQ=c.Q[m]+sg*gauss();let b=0,bd=1e30;
+   for(let j=0;j<M;j++){const dI=rI-c.I[j],dQ=rQ-c.Q[j],d=dI*dI+dQ*dQ;if(d<bd){bd=d;b=j}}
+   err+=pop(c.L[m]^c.L[b]);bits+=k}
+  if(performance.now()-t>30){await yieldUI();t=performance.now()}}
+ return{err,bits}}
+const R={};
+async function run(){stopFlag=false;$('run').disabled=true;
+ const sel=[...document.querySelectorAll('#mods input:checked')].map(e=>e.value);
+ const a=+$('dmin').value,b=+$('dmax').value,st=Math.max(.1,+$('dstep').value),emax=+$('emax').value,bmax=+$('bmax').value;
+ const pts=[];for(let d=a;d<=b+1e-9;d+=st)pts.push(+d.toFixed(3));
+ sel.forEach(m=>R[m]=[]);const tot=sel.length*pts.length;let done=0;
+ for(const m of sel){for(const d of pts){if(stopFlag)break;
+  $('status').textContent=`Simulating ${m} at ${d} dB…`;
+  const r=await point(m,d,emax,bmax);if(stopFlag)break;
+  R[m].push({db:d,err:r.err,bits:r.bits,ber:r.err/r.bits,ub:r.err===0?3/r.bits:null,th:theory(m,d)});
+  done++;$('bar').firstChild.style.width=100*done/tot+'%';draw()}
+  if(stopFlag)break}
+ $('status').textContent=stopFlag?'Stopped.':'Done.';$('run').disabled=false;table();analyse()}
+function setup(cv){const d=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;cv.width=w*d;cv.height=h*d;const x=cv.getContext('2d');x.scale(d,d);x.clearRect(0,0,w,h);return{x,w,h}}
+function frame(cv,o){const{x,w,h}=setup(cv),m={l:56,r:14,t:12,b:40};const pw=w-m.l-m.r,ph=h-m.t-m.b;
+ const fx=v=>m.l+pw*((o.xlog?Math.log10(v):v)-o.x0)/(o.x1-o.x0),fy=v=>m.t+ph*(1-(Math.log10(v)-o.y0)/(o.y1-o.y0));
+ x.font='11px sans-serif';x.fillStyle='#374151';x.strokeStyle='#e5e7eb';x.lineWidth=1;
+ for(let e=o.y0;e<=o.y1;e++){const y=fy(Math.pow(10,e));x.beginPath();x.moveTo(m.l,y);x.lineTo(m.l+pw,y);x.stroke();x.textAlign='right';x.fillText('1e'+e,m.l-5,y+4)}
+ if(o.xlog){for(let e=o.x0;e<=o.x1;e++){const X=fx(Math.pow(10,e));x.beginPath();x.moveTo(X,m.t);x.lineTo(X,m.t+ph);x.stroke();x.textAlign='center';x.fillText('1e'+e,X,m.t+ph+14)}}
+ else{const s=Math.max(1,Math.ceil((o.x1-o.x0)/10));for(let v=Math.ceil(o.x0);v<=o.x1;v+=s){const X=fx(v);x.beginPath();x.moveTo(X,m.t);x.lineTo(X,m.t+ph);x.stroke();x.textAlign='center';x.fillText(v,X,m.t+ph+14)}}
+ x.strokeStyle='#111';x.strokeRect(m.l,m.t,pw,ph);x.textAlign='center';x.font='12px sans-serif';x.fillText(o.xl,m.l+pw/2,h-6);
+ x.save();x.translate(13,m.t+ph/2);x.rotate(-Math.PI/2);x.fillText(o.yl,0,0);x.restore();
+ x.save();x.beginPath();x.rect(m.l,m.t,pw,ph);x.clip();return{x,fx,fy,done:()=>x.restore()}}
+function mark(x,X,Y,c,hollow){x.beginPath();if(hollow){x.moveTo(X-5,Y-4);x.lineTo(X+5,Y-4);x.lineTo(X,Y+5);x.closePath();x.strokeStyle=c;x.lineWidth=1.5;x.stroke()}else{x.arc(X,Y,3.5,0,7);x.fillStyle=c;x.fill()}}
+function draw(){
+ let f=frame($('c1'),{x0:+$('dmin').value,x1:+$('dmax').value,y0:-7,y1:0,xl:'Eb/N0 (dB)',yl:'Bit error rate'});
+ for(const m in R){const c=MODS[m].col,x=f.x;
+  x.strokeStyle=c;x.lineWidth=1.3;x.setLineDash([5,4]);x.beginPath();
+  for(let d=+$('dmin').value;d<=+$('dmax').value+1e-9;d+=.25){const t=theory(m,d);if(t<1e-9)continue;const X=f.fx(d),Y=f.fy(t);d===+$('dmin').value?x.moveTo(X,Y):x.lineTo(X,Y)}x.stroke();x.setLineDash([]);
+  x.lineWidth=1;x.beginPath();let first=1;R[m].forEach(p=>{if(p.ub!==null)return;const X=f.fx(p.db),Y=f.fy(p.ber);first?x.moveTo(X,Y):x.lineTo(X,Y);first=0});x.globalAlpha=.35;x.stroke();x.globalAlpha=1;
+  R[m].forEach(p=>mark(x,f.fx(p.db),f.fy(p.ub??p.ber),c,p.ub!==null))}
+ f.done();legend(f);
+ const g=frame($('c2'),{xlog:1,x0:2,x1:6.2,y0:0,y1:3,xl:'Transmitted bits',yl:'Bit errors counted'});
+ const e=+$('emax').value;g.x.strokeStyle='#6b7280';g.x.setLineDash([3,3]);g.x.beginPath();g.x.moveTo(g.fx(100),g.fy(e));g.x.lineTo(g.fx(1e7),g.fy(e));g.x.stroke();
+ const bx=g.fx(+$('bmax').value);g.x.beginPath();g.x.moveTo(bx,g.fy(1));g.x.lineTo(bx,g.fy(1e3));g.x.stroke();g.x.setLineDash([]);
+ for(const m in R)R[m].forEach(p=>mark(g.x,g.fx(p.bits),g.fy(Math.max(p.err,1)),MODS[m].col,p.err===0));
+ g.done();legend(g)}
+function legend(f){}
+function table(){const tb=document.querySelector('#tbl tbody');let h='';
+ for(const m in R)R[m].forEach(p=>{h+=`<tr><td style="color:${MODS[m].col}">${m}</td><td>${p.db}</td><td>${p.err}</td><td>${p.bits}</td><td>${p.ub!==null?'&lt; '+p.ub.toExponential(2)+' (UB)':p.ber.toExponential(3)}</td><td>${p.th.toExponential(3)}</td><td>${p.ub!==null?'—':(p.ber/p.th).toFixed(2)}</td></tr>`});tb.innerHTML=h}
+function analyse(){let h='<ul>';
+ for(const m in R){const v=R[m].filter(p=>p.err>=100&&p.th>0);
+  const ub=R[m].filter(p=>p.ub!==null).length;
+  if(!v.length){h+=`<li><b>${m}</b>: too few well-resolved points (≥100 errors) to judge.</li>`;continue}
+  const dev=v.map(p=>Math.log10(p.ber/p.th)),mean=dev.reduce((a,b)=>a+b,0)/dev.length,mx=Math.max(...dev.map(Math.abs));
+  const ok=mx<0.12;
+  h+=`<li><b>${m}</b> (${v.length} resolved pts${ub?`, ${ub} upper-bound pts`:''}): mean log₁₀(sim/theory) = ${mean.toFixed(3)}, max |dev| = ${mx.toFixed(2)} decades → <span class="${ok?'pass':'fail'}">${ok?'agrees with theory':'discrepancy'}</span>.`+
+  (ok?'':` Likely cause: ${m==='8-PSK'||m.includes('QAM')?'nearest-neighbour/Gray approximation is loose at low Eb/N0 (check by comparing only high-SNR points, where the approximation tightens)':'Eb/N0↔N0 conversion or noise-variance error (a factor k or 2 appears as a horizontal shift of 10log₁₀k or 3 dB; test with the noiseless and −40 dB checks)'}.`)+'</li>'}
+ h+='</ul><div class="mut">Statistical test: with 200 errors the 1σ relative uncertainty is ≈1/√200 ≈ 7%, so deviations beyond ~15–20% at ≥100 errors are significant. Points with 0 errors are shown as upper bounds only.</div>';$('obs').innerHTML=h}
+async function validate(){$('vout').textContent='Running…';let h='';stopFlag=false;
+ for(const m in MODS){const a=await point(m,0,1,40000,true);
+  const b=await point(m,-40,1e9,200000);const ber=b.err/b.bits;
+  h+=`<div>${m}: noiseless errors = ${a.err} <span class="${a.err===0?'pass':'fail'}">${a.err===0?'PASS':'FAIL'}</span> · BER @ −40 dB = ${ber.toFixed(4)} (expect 0.5) <span class="${Math.abs(ber-.5)<.01?'pass':'fail'}">${Math.abs(ber-.5)<.01?'PASS':'FAIL'}</span></div>`}
+ $('vout').innerHTML=h}
+function png(id){const a=document.createElement('a');a.href=$(id).toDataURL('image/png');a.download=id+'.png';a.click()}
+$('run').onclick=run;$('stop').onclick=()=>stopFlag=true;$('val').onclick=validate;
+addEventListener('resize',draw);draw();
+</script></body></html>
